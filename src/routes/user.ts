@@ -1,4 +1,5 @@
 import bcrypt from "bcryptjs";
+import { createHash, randomBytes } from "node:crypto";
 import { Router } from "express";
 import { isValidObjectId } from "mongoose";
 import jwt from "jsonwebtoken";
@@ -8,15 +9,18 @@ import { Lead } from "../models/Lead.js";
 import { User } from "../models/User.js";
 import { Review } from "../models/Review.js";
 import { ServiceRequest } from "../models/ServiceRequest.js";
-import { createNotification } from "../services/notifications.js";
+import { createNotification, sendExternalAlerts } from "../services/notifications.js";
 import { requireUser } from "../middleware/auth.js";
 
 const credentialsSchema = z.object({ email: z.email(), password: z.string().min(8).max(200) });
 const registerSchema = credentialsSchema.extend({ name: z.string().trim().min(2).max(100) });
+const forgotPasswordSchema = z.object({ email: z.email() });
+const resetPasswordSchema = z.object({ email: z.email(), token: z.string().min(32).max(256), password: z.string().min(8).max(200) });
 export const userRouter = Router();
 
 const tokenFor = (user: { id: string; email: string }) => jwt.sign({ email: user.email, role: "user" }, env.JWT_SECRET, { subject: user.id, expiresIn: "7d" });
 const publicUser = (user: { _id: unknown; name: string; email: string }) => ({ id: String(user._id), name: user.name, email: user.email });
+const hashResetToken = (token: string) => createHash("sha256").update(token).digest("hex");
 
 userRouter.post("/register", async (req, res, next) => {
   try {
@@ -35,6 +39,50 @@ userRouter.post("/login", async (req, res, next) => {
     const user = await User.findOne({ email: input.email.toLowerCase() }).select("+passwordHash");
     if (!user || !(await bcrypt.compare(input.password, user.passwordHash))) { res.status(401).json({ detail: "Invalid email or password." }); return; }
     res.json({ access_token: tokenFor({ id: String(user._id), email: user.email }), user: publicUser(user) });
+  } catch (error) { next(error); }
+});
+
+userRouter.post("/forgot-password", async (req, res, next) => {
+  try {
+    const { email } = forgotPasswordSchema.parse(req.body);
+    const normalizedEmail = email.toLowerCase();
+    const user = await User.findOne({ email: normalizedEmail });
+
+    if (user) {
+      const token = randomBytes(32).toString("base64url");
+      user.passwordResetTokenHash = hashResetToken(token);
+      user.passwordResetExpiresAt = new Date(Date.now() + 60 * 60 * 1000);
+      await user.save();
+
+      const resetUrl = `${env.CLIENT_ORIGIN.replace(/\/$/, "")}/reset-password?email=${encodeURIComponent(normalizedEmail)}&token=${encodeURIComponent(token)}`;
+      await sendExternalAlerts({
+        email: normalizedEmail,
+        subject: "Reset your Adkinest password",
+        body: `Use this secure link to reset your Adkinest client password. It expires in 1 hour.\n\n${resetUrl}\n\nIf you did not request this, you can ignore this email.`,
+      });
+    }
+
+    res.json({ detail: "If that account exists, a password reset link has been sent." });
+  } catch (error) { next(error); }
+});
+
+userRouter.post("/reset-password", async (req, res, next) => {
+  try {
+    const input = resetPasswordSchema.parse(req.body);
+    const user = await User.findOne({ email: input.email.toLowerCase() }).select("+passwordHash +passwordResetTokenHash +passwordResetExpiresAt");
+    const tokenHash = hashResetToken(input.token);
+
+    if (!user || !user.passwordResetTokenHash || user.passwordResetTokenHash !== tokenHash || !user.passwordResetExpiresAt || user.passwordResetExpiresAt.getTime() < Date.now()) {
+      res.status(400).json({ detail: "This reset link is invalid or has expired." });
+      return;
+    }
+
+    user.passwordHash = await bcrypt.hash(input.password, 12);
+    user.passwordResetTokenHash = undefined;
+    user.passwordResetExpiresAt = undefined;
+    await user.save();
+
+    res.json({ detail: "Password updated. You can sign in now." });
   } catch (error) { next(error); }
 });
 
