@@ -1,6 +1,7 @@
 import { createApp } from "../src/app.js";
 import { connectDatabase } from "../src/config/database.js";
 
+const app = createApp();
 let initialized = false;
 
 async function initialize(): Promise<void> {
@@ -15,8 +16,6 @@ export default async function handler(
   res: any
 ): Promise<void> {
   await initialize();
-
-  const app = createApp();
 
   app(req, res);
 }

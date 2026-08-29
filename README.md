@@ -16,6 +16,27 @@ password is printed once, so store it securely.
 
 The API runs on `http://localhost:5000` by default.
 
+## Deploying to Vercel
+
+Deploy this `backend` folder as the Vercel project root. The included
+`vercel.json` builds the TypeScript project and rewrites `/api/*` requests to
+the serverless Express entry point in `api/index.ts`.
+
+Add these environment variables in Vercel Project Settings:
+
+- `NODE_ENV=production`
+- `MONGODB_URI`
+- `CLIENT_ORIGIN`
+- `JWT_SECRET`
+- `ADMIN_EMAIL`
+- `ADMIN_PASSWORD_HASH`
+- `RATE_LIMIT_WINDOW_MS`
+- `RATE_LIMIT_MAX`
+- `RESEND_API_KEY` if email notifications are enabled
+- `NOTIFICATION_FROM_EMAIL` if email notifications are enabled
+
+After deployment, test `https://<your-backend-domain>/api/health`.
+
 ## Endpoints
 
 - `GET /api/health` returns service and database status.
