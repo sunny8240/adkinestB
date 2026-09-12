@@ -10,8 +10,50 @@ import { Conversation } from "../models/Conversation.js";
 import { Message } from "../models/Message.js";
 import { createNotification, sendExternalAlerts } from "../services/notifications.js";
 import { env } from "../config/env.js";
+import { BlogPost } from "../models/BlogPost.js";
+import { PageContent } from "../models/PageContent.js";
 
 export const publicRouter = Router();
+
+publicRouter.get("/blog", async (req, res, next) => {
+  try {
+    const page = Math.max(Number(req.query.page) || 1, 1);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 9, 1), 30);
+    const query = String(req.query.q || "").trim();
+    const category = String(req.query.category || "").trim();
+    const filter: Record<string, unknown> = { status: "published" };
+    if (category) filter.category = category;
+    if (query) filter.$or = [{ title: { $regex: query, $options: "i" } }, { excerpt: { $regex: query, $options: "i" } }, { tags: { $regex: query, $options: "i" } }];
+    const [posts, total] = await Promise.all([
+      BlogPost.find(filter).sort({ featured: -1, publishedAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+      BlogPost.countDocuments(filter),
+    ]);
+    res.json({ posts: posts.map((post) => ({ ...post, id: String(post._id) })), page, limit, total, pages: Math.ceil(total / limit) });
+  } catch (error) { next(error); }
+});
+
+publicRouter.get("/blog/:slug", async (req, res, next) => {
+  try {
+    const post = await BlogPost.findOne({ slug: req.params.slug, status: "published" }).lean();
+    if (!post) { res.status(404).json({ detail: "Blog post not found." }); return; }
+    res.json({ ...post, id: String(post._id) });
+  } catch (error) { next(error); }
+});
+
+publicRouter.get("/pages", async (_req, res, next) => {
+  try {
+    const pages = await PageContent.find({ status: "published" }).sort({ updatedAt: -1 }).lean();
+    res.json(pages.map((page) => ({ ...page, id: String(page._id) })));
+  } catch (error) { next(error); }
+});
+
+publicRouter.get("/pages/:slug", async (req, res, next) => {
+  try {
+    const page = await PageContent.findOne({ slug: req.params.slug, status: "published" }).lean();
+    if (!page) { res.status(404).json({ detail: "Page not found." }); return; }
+    res.json({ ...page, id: String(page._id) });
+  } catch (error) { next(error); }
+});
 
 publicRouter.get("/content", async (_req, res, next) => {
   try { res.json(await SiteContent.findOne({ key: "main" }).select("-key").lean() ?? { announcement: "", hero_title: "", hero_description: "", services: [] }); } catch (error) { next(error); }

@@ -9,8 +9,82 @@ import { Review } from "../models/Review.js";
 import { ServiceRequest } from "../models/ServiceRequest.js";
 import { createNotification } from "../services/notifications.js";
 import { requireAdmin } from "../middleware/auth.js";
+import { BlogPost, type BlogPostStatus } from "../models/BlogPost.js";
+import { PageContent } from "../models/PageContent.js";
 
 const idParam = z.string().refine(isValidObjectId, "Invalid record id");
+const blogStatus = z.enum(["draft", "published"]);
+const blogPostSchema = z.object({
+  title: z.string().trim().min(2).max(160),
+  slug: z.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Slug must use lowercase letters, numbers and hyphens.").max(180),
+  excerpt: z.string().trim().min(10).max(400),
+  content: z.string().trim().min(20).max(100000),
+  coverImage: z.string().url().max(2048).optional().or(z.literal("")),
+  author: z.string().trim().min(2).max(120),
+  category: z.string().trim().min(2).max(60),
+  tags: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
+  status: blogStatus.default("draft"),
+  featured: z.boolean().default(false),
+  seoTitle: z.string().trim().max(160).optional().or(z.literal("")),
+  seoDescription: z.string().trim().max(320).optional().or(z.literal("")),
+  seoKeywords: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
+});
+const stripUnsafeHtml = (content: string) => content.replace(/<\/?(script|iframe|object|embed|style)[^>]*>/gi, "");
+const blogInput = (input: z.infer<typeof blogPostSchema>) => ({ ...input, content: stripUnsafeHtml(input.content), publishedAt: input.status === "published" ? new Date() : undefined });
+
+const pageSectionItemSchema = z.object({
+  title: z.string().trim().min(1).max(100),
+  description: z.string().trim().max(500).optional().or(z.literal("")),
+  value: z.string().trim().max(80).optional().or(z.literal("")),
+});
+
+const pageSectionSchema = z.object({
+  id: z.string().trim().min(1).max(80),
+  type: z.enum(["hero", "features", "stats", "cta", "content"]),
+  eyebrow: z.string().trim().max(80).optional().or(z.literal("")),
+  title: z.string().trim().max(180).optional().or(z.literal("")),
+  description: z.string().trim().max(2000).optional().or(z.literal("")),
+  body: z.string().trim().max(10000).optional().or(z.literal("")),
+  primaryCtaLabel: z.string().trim().max(60).optional().or(z.literal("")),
+  primaryCtaHref: z.string().trim().max(250).optional().or(z.literal("")),
+  secondaryCtaLabel: z.string().trim().max(60).optional().or(z.literal("")),
+  secondaryCtaHref: z.string().trim().max(250).optional().or(z.literal("")),
+  items: z.array(pageSectionItemSchema).max(12).default([]),
+}).strict();
+
+const pageSchema = z.object({
+  slug: z.string().trim().min(2).max(120).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Slug must use lowercase letters, numbers and hyphens."),
+  title: z.string().trim().min(2).max(180),
+  excerpt: z.string().trim().min(10).max(500),
+  status: z.enum(["draft", "published"]).default("draft"),
+  sections: z.array(pageSectionSchema).max(12).default([]),
+  seoTitle: z.string().trim().max(160).optional().or(z.literal("")),
+  seoDescription: z.string().trim().max(320).optional().or(z.literal("")),
+  seoKeywords: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
+});
+
+const sanitizePageSections = (sections: z.infer<typeof pageSectionSchema>[]) =>
+  sections.map((section) => ({
+    ...section,
+    title: section.title ? stripUnsafeHtml(section.title) : "",
+    description: section.description ? stripUnsafeHtml(section.description) : "",
+    body: section.body ? stripUnsafeHtml(section.body) : "",
+    eyebrow: section.eyebrow ? stripUnsafeHtml(section.eyebrow) : "",
+    primaryCtaLabel: section.primaryCtaLabel ? stripUnsafeHtml(section.primaryCtaLabel) : "",
+    secondaryCtaLabel: section.secondaryCtaLabel ? stripUnsafeHtml(section.secondaryCtaLabel) : "",
+    items: (section.items || []).map((item) => ({
+      ...item,
+      title: stripUnsafeHtml(item.title),
+      description: item.description ? stripUnsafeHtml(item.description) : "",
+      value: item.value ? stripUnsafeHtml(item.value) : "",
+    })),
+  }));
+
+const pageInput = (input: z.infer<typeof pageSchema>) => ({
+  ...input,
+  sections: sanitizePageSections(input.sections),
+  publishedAt: input.status === "published" ? new Date() : undefined,
+});
 const projectSchema = z.object({
   title: z.string().trim().min(2).max(120),
   description: z.string().trim().min(10).max(2000),
@@ -124,4 +198,87 @@ adminRouter.put("/testimonials/:id", async (req, res, next) => {
 });
 adminRouter.delete("/testimonials/:id", async (req, res, next) => {
   try { await Testimonial.findByIdAndDelete(idParam.parse(req.params.id)); res.json({ ok: true }); } catch (error) { next(error); }
+});
+
+adminRouter.get("/blog", async (req, res, next) => {
+  try {
+    const query = String(req.query.q || "").trim();
+    const status = req.query.status ? blogStatus.parse(String(req.query.status)) : undefined;
+    const category = String(req.query.category || "").trim();
+    const featured = req.query.featured === undefined ? undefined : req.query.featured === "true";
+    const sortKey = String(req.query.sort || "newest");
+    const filter: Record<string, unknown> = {};
+    if (status) filter.status = status;
+    if (category) filter.category = category;
+    if (featured !== undefined) filter.featured = featured;
+    if (query) filter.$or = [{ title: { $regex: query, $options: "i" } }, { slug: { $regex: query, $options: "i" } }, { category: { $regex: query, $options: "i" } }];
+    const sort: Record<string, 1 | -1> = sortKey === "oldest" ? { createdAt: 1 } : sortKey === "updated" ? { updatedAt: -1 } : { createdAt: -1 };
+    sendList(res, await BlogPost.find(filter).sort(sort).lean());
+  } catch (error) { next(error); }
+});
+adminRouter.post("/blog", async (req, res, next) => {
+  try { res.status(201).json(idOf((await BlogPost.create(blogInput(blogPostSchema.parse(req.body)))).toObject())); } catch (error) { next(error); }
+});
+adminRouter.put("/blog/:id", async (req, res, next) => {
+  try {
+    const post = await BlogPost.findByIdAndUpdate(idParam.parse(req.params.id), blogInput(blogPostSchema.parse(req.body)), { new: true, runValidators: true }).lean();
+    if (!post) { res.status(404).json({ detail: "Blog post not found." }); return; }
+    res.json(idOf(post));
+  } catch (error) { next(error); }
+});
+adminRouter.delete("/blog/:id", async (req, res, next) => {
+  try { await BlogPost.findByIdAndDelete(idParam.parse(req.params.id)); res.json({ ok: true }); } catch (error) { next(error); }
+});
+adminRouter.patch("/blog/:id/status", async (req, res, next) => {
+  try {
+    const status = z.object({ status: blogStatus }).parse(req.body).status;
+    const post = await BlogPost.findByIdAndUpdate(idParam.parse(req.params.id), { status, publishedAt: status === "published" ? new Date() : undefined }, { new: true }).lean();
+    if (!post) { res.status(404).json({ detail: "Blog post not found." }); return; }
+    res.json(idOf(post));
+  } catch (error) { next(error); }
+});
+adminRouter.patch("/blog/:id/featured", async (req, res, next) => {
+  try {
+    const featured = z.object({ featured: z.boolean() }).parse(req.body).featured;
+    const post = await BlogPost.findByIdAndUpdate(idParam.parse(req.params.id), { featured }, { new: true }).lean();
+    if (!post) { res.status(404).json({ detail: "Blog post not found." }); return; }
+    res.json(idOf(post));
+  } catch (error) { next(error); }
+});
+
+adminRouter.get("/pages", async (_req, res, next) => {
+  try {
+    const pages = await PageContent.find().sort({ updatedAt: -1 }).lean();
+    res.json(pages.map((page) => ({ ...page, id: String(page._id) })));
+  } catch (error) { next(error); }
+});
+
+adminRouter.post("/pages", async (req, res, next) => {
+  try {
+    const payload = pageInput(pageSchema.parse(req.body));
+    const page = await PageContent.create(payload);
+    res.status(201).json({ ...page.toObject(), id: String(page._id) });
+  } catch (error) { next(error); }
+});
+
+adminRouter.put("/pages/:id", async (req, res, next) => {
+  try {
+    const payload = pageInput(pageSchema.parse(req.body));
+    const page = await PageContent.findByIdAndUpdate(idParam.parse(req.params.id), payload, { new: true, runValidators: true }).lean();
+    if (!page) { res.status(404).json({ detail: "Page not found." }); return; }
+    res.json({ ...page, id: String(page._id) });
+  } catch (error) { next(error); }
+});
+
+adminRouter.delete("/pages/:id", async (req, res, next) => {
+  try { await PageContent.findByIdAndDelete(idParam.parse(req.params.id)); res.json({ ok: true }); } catch (error) { next(error); }
+});
+
+adminRouter.patch("/pages/:id/status", async (req, res, next) => {
+  try {
+    const status = z.object({ status: z.enum(["draft", "published"]) }).parse(req.body).status;
+    const page = await PageContent.findByIdAndUpdate(idParam.parse(req.params.id), { status, publishedAt: status === "published" ? new Date() : undefined }, { new: true }).lean();
+    if (!page) { res.status(404).json({ detail: "Page not found." }); return; }
+    res.json({ ...page, id: String(page._id) });
+  } catch (error) { next(error); }
 });

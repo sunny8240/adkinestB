@@ -15,9 +15,24 @@ export function applySecurity(app: Express): void {
 
   app.use(helmet());
 
+  const allowedOrigins = new Set([
+    env.CLIENT_ORIGIN.replace(/\/$/, ""),
+    "https://adkinest.tech",
+    "https://www.adkinest.tech",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+  ]);
+
   app.use(
     cors({
-      origin: env.CLIENT_ORIGIN,
+      origin: (requestOrigin, callback) => {
+        if (!requestOrigin || allowedOrigins.has(requestOrigin.replace(/\/$/, ""))) {
+          callback(null, true);
+          return;
+        }
+
+        callback(null, false);
+      },
       methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
       allowedHeaders: [
         "Content-Type",
