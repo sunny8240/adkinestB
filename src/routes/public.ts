@@ -36,7 +36,15 @@ publicRouter.get("/blog/:slug", async (req, res, next) => {
   try {
     const post = await BlogPost.findOne({ slug: req.params.slug, status: "published" }).lean();
     if (!post) { res.status(404).json({ detail: "Blog post not found." }); return; }
-    res.json({ ...post, id: String(post._id) });
+    res.json({
+      ...post,
+      id: String(post._id),
+      canonicalUrl: post.canonicalUrl || `https://www.adkinest.tech/blog/${post.slug}`,
+      seoTitle: post.seoTitle || post.title,
+      seoDescription: post.seoDescription || post.excerpt,
+      socialTitle: post.socialTitle || post.seoTitle || post.title,
+      socialDescription: post.socialDescription || post.seoDescription || post.excerpt,
+    });
   } catch (error) { next(error); }
 });
 

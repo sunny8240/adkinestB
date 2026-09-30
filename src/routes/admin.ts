@@ -11,26 +11,60 @@ import { createNotification } from "../services/notifications.js";
 import { requireAdmin } from "../middleware/auth.js";
 import { BlogPost, type BlogPostStatus } from "../models/BlogPost.js";
 import { PageContent } from "../models/PageContent.js";
+import { buildCanonicalUrl, toSlug } from "../services/seo.js";
+import { env } from "../config/env.js";
 
 const idParam = z.string().refine(isValidObjectId, "Invalid record id");
 const blogStatus = z.enum(["draft", "published"]);
 const blogPostSchema = z.object({
   title: z.string().trim().min(2).max(160),
-  slug: z.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Slug must use lowercase letters, numbers and hyphens.").max(180),
+  slug: z.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Slug must use lowercase letters, numbers and hyphens.").max(180).optional().or(z.literal("")),
   excerpt: z.string().trim().min(10).max(400),
   content: z.string().trim().min(20).max(100000),
   coverImage: z.string().url().max(2048).optional().or(z.literal("")),
+  coverImageAlt: z.string().trim().max(220).optional().or(z.literal("")),
+  coverImageCaption: z.string().trim().max(220).optional().or(z.literal("")),
   author: z.string().trim().min(2).max(120),
   category: z.string().trim().min(2).max(60),
   tags: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
   status: blogStatus.default("draft"),
   featured: z.boolean().default(false),
+  focusKeyword: z.string().trim().max(120).optional().or(z.literal("")),
+  canonicalUrl: z.string().trim().max(2048).optional().or(z.literal("")),
+  socialTitle: z.string().trim().max(160).optional().or(z.literal("")),
+  socialDescription: z.string().trim().max(320).optional().or(z.literal("")),
+  socialImage: z.string().url().max(2048).optional().or(z.literal("")),
+  publishedAt: z.union([z.string(), z.date(), z.null()]).optional().nullable().transform((value) => value ? new Date(value) : undefined),
+  lastUpdatedAt: z.union([z.string(), z.date(), z.null()]).optional().nullable().transform((value) => value ? new Date(value) : undefined),
+  relatedServices: z.array(z.string().trim().min(1).max(80)).max(10).default([]),
+  faqs: z.array(z.object({ question: z.string().trim().min(2).max(240), answer: z.string().trim().min(2).max(2000) })).max(12).default([]),
   seoTitle: z.string().trim().max(160).optional().or(z.literal("")),
   seoDescription: z.string().trim().max(320).optional().or(z.literal("")),
   seoKeywords: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
 });
 const stripUnsafeHtml = (content: string) => content.replace(/<\/?(script|iframe|object|embed|style)[^>]*>/gi, "");
-const blogInput = (input: z.infer<typeof blogPostSchema>) => ({ ...input, content: stripUnsafeHtml(input.content), publishedAt: input.status === "published" ? new Date() : undefined });
+const blogInput = (input: z.infer<typeof blogPostSchema>) => {
+  const normalizedSlug = (input.slug && input.slug.trim()) || toSlug(input.title);
+  const normalizedCanonical = (input.canonicalUrl && input.canonicalUrl.trim()) || buildCanonicalUrl(env.CLIENT_ORIGIN || "https://www.adkinest.tech", normalizedSlug);
+  const now = new Date();
+  const publishedAt = input.status === "published" ? (input.publishedAt ?? now) : undefined;
+  const lastUpdatedAt = input.lastUpdatedAt ?? publishedAt ?? now;
+
+  return {
+    ...input,
+    slug: normalizedSlug,
+    coverImageAlt: input.coverImageAlt?.trim() || "",
+    coverImageCaption: input.coverImageCaption?.trim() || "",
+    focusKeyword: input.focusKeyword?.trim() || "",
+    canonicalUrl: normalizedCanonical,
+    socialTitle: input.socialTitle?.trim() || input.seoTitle?.trim() || input.title.trim(),
+    socialDescription: input.socialDescription?.trim() || input.seoDescription?.trim() || input.excerpt.trim(),
+    socialImage: input.socialImage?.trim() || input.coverImage?.trim() || "",
+    content: stripUnsafeHtml(input.content),
+    publishedAt,
+    lastUpdatedAt,
+  };
+};
 
 const pageSectionItemSchema = z.object({
   title: z.string().trim().min(1).max(100),
