@@ -34,6 +34,7 @@ Add these environment variables in Vercel Project Settings:
 - `RATE_LIMIT_MAX`
 - `RESEND_API_KEY` if email notifications are enabled
 - `NOTIFICATION_FROM_EMAIL` if email notifications are enabled
+- `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and `CLOUDINARY_API_SECRET` for admin blog image uploads
 
 After deployment, test `https://<your-backend-domain>/api/health`.
 
@@ -54,3 +55,5 @@ Set `CLIENT_ORIGIN` to the deployed frontend URL in production and set
 `VITE_BACKEND_URL` to the deployed backend URL before building the frontend.
 
 The API applies Helmet security headers, strict JSON limits, CORS allow-listing, rate limiting, input validation, and centralized error responses.
+
+Blog images are uploaded through the authenticated `POST /api/admin/uploads/images` endpoint. The API limits uploads to 4 MB and stores them in the `adkinest/blog` Cloudinary folder; filesystem storage is intentionally avoided for Vercel's serverless runtime.

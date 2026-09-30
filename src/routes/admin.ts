@@ -1,5 +1,7 @@
 import { Router, type Response } from "express";
+import { fileTypeFromBuffer } from "file-type";
 import { isValidObjectId } from "mongoose";
+import multer from "multer";
 import { z } from "zod";
 import { Lead, type LeadStatus } from "../models/Lead.js";
 import { Project } from "../models/Project.js";
@@ -12,6 +14,7 @@ import { requireAdmin } from "../middleware/auth.js";
 import { BlogPost, type BlogPostStatus } from "../models/BlogPost.js";
 import { PageContent } from "../models/PageContent.js";
 import { buildCanonicalUrl, toSlug } from "../services/seo.js";
+import { uploadBlogImage } from "../services/imageStorage.js";
 import { env } from "../config/env.js";
 
 const idParam = z.string().refine(isValidObjectId, "Invalid record id");
@@ -22,6 +25,7 @@ const blogPostSchema = z.object({
   excerpt: z.string().trim().min(10).max(400),
   content: z.string().trim().min(20).max(100000),
   coverImage: z.string().url().max(2048).optional().or(z.literal("")),
+  coverImageTitle: z.string().trim().max(160).optional().or(z.literal("")),
   coverImageAlt: z.string().trim().max(220).optional().or(z.literal("")),
   coverImageCaption: z.string().trim().max(220).optional().or(z.literal("")),
   author: z.string().trim().min(2).max(120),
@@ -37,6 +41,13 @@ const blogPostSchema = z.object({
   publishedAt: z.union([z.string(), z.date(), z.null()]).optional().nullable().transform((value) => value ? new Date(value) : undefined),
   lastUpdatedAt: z.union([z.string(), z.date(), z.null()]).optional().nullable().transform((value) => value ? new Date(value) : undefined),
   relatedServices: z.array(z.string().trim().min(1).max(80)).max(10).default([]),
+  inlineImages: z.array(z.object({
+    url: z.string().url().max(2048),
+    title: z.string().trim().max(160).default(""),
+    alt: z.string().trim().max(220).default(""),
+    caption: z.string().trim().max(220).default(""),
+    afterParagraph: z.number().int().min(0).max(1000),
+  })).max(20).default([]),
   faqs: z.array(z.object({ question: z.string().trim().min(2).max(240), answer: z.string().trim().min(2).max(2000) })).max(12).default([]),
   seoTitle: z.string().trim().max(160).optional().or(z.literal("")),
   seoDescription: z.string().trim().max(320).optional().or(z.literal("")),
@@ -150,6 +161,54 @@ const sendList = (res: Response, records: unknown[]) => res.json(records.map((re
 
 export const adminRouter = Router();
 adminRouter.use(requireAdmin);
+
+const allowedImageTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/avif"]);
+const parseBlogImage = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 4 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, callback) => {
+    if (!allowedImageTypes.has(file.mimetype)) {
+      callback(Object.assign(new Error("Upload a JPG, PNG, WebP, or AVIF image."), { statusCode: 415 }));
+      return;
+    }
+    callback(null, true);
+  },
+}).single("image");
+
+adminRouter.post("/uploads/images", (req, res, next) => {
+  parseBlogImage(req, res, (error) => {
+    if (!error) {
+      next();
+      return;
+    }
+    if (error instanceof multer.MulterError) {
+      res.status(error.code === "LIMIT_FILE_SIZE" ? 413 : 400).json({ detail: error.code === "LIMIT_FILE_SIZE" ? "Image must be 4 MB or smaller." : "Upload one image file." });
+      return;
+    }
+    const uploadError = error as Error & { statusCode?: number };
+    res.status(uploadError.statusCode || 400).json({ detail: uploadError.message });
+  });
+}, async (req, res, next) => {
+  if (!req.file) {
+    res.status(400).json({ detail: "Choose an image to upload." });
+    return;
+  }
+  try {
+    const detectedType = await fileTypeFromBuffer(req.file.buffer);
+    if (!detectedType || detectedType.mime !== req.file.mimetype || !allowedImageTypes.has(detectedType.mime)) {
+      res.status(415).json({ detail: "The uploaded file is not a supported image." });
+      return;
+    }
+    res.status(201).json(await uploadBlogImage(req.file.buffer));
+  } catch (error) {
+    const uploadError = error as Error & { statusCode?: number };
+    if (uploadError.statusCode === 503) {
+      res.status(503).json({ detail: uploadError.message });
+      return;
+    }
+    next(error);
+  }
+});
 
 adminRouter.get("/content", async (_req, res, next) => {
   try { res.json(await SiteContent.findOne({ key: "main" }).lean() ?? { announcement: "", hero_title: "", hero_description: "", services: [] }); } catch (error) { next(error); }

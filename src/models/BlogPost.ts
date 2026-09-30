@@ -8,6 +8,7 @@ export interface BlogPostDocument {
   excerpt: string;
   content: string;
   coverImage?: string;
+  coverImageTitle?: string;
   coverImageAlt?: string;
   coverImageCaption?: string;
   author: string;
@@ -23,6 +24,7 @@ export interface BlogPostDocument {
   publishedAt?: Date;
   lastUpdatedAt?: Date;
   relatedServices?: string[];
+  inlineImages?: Array<{ url: string; title: string; alt: string; caption: string; afterParagraph: number }>;
   faqs?: Array<{ question: string; answer: string }>;
   seoTitle?: string;
   seoDescription?: string;
@@ -38,6 +40,7 @@ const blogPostSchema = new Schema<BlogPostDocument>(
     excerpt: { type: String, required: true, trim: true, maxlength: 400 },
     content: { type: String, required: true, maxlength: 100000 },
     coverImage: { type: String, trim: true, maxlength: 2048 },
+    coverImageTitle: { type: String, trim: true, maxlength: 160 },
     coverImageAlt: { type: String, trim: true, maxlength: 220 },
     coverImageCaption: { type: String, trim: true, maxlength: 220 },
     author: { type: String, required: true, trim: true, maxlength: 120 },
@@ -53,6 +56,11 @@ const blogPostSchema = new Schema<BlogPostDocument>(
     publishedAt: { type: Date },
     lastUpdatedAt: { type: Date },
     relatedServices: { type: [String], default: [] },
+    inlineImages: {
+      type: [{ url: { type: String, trim: true, maxlength: 2048 }, title: { type: String, trim: true, maxlength: 160 }, alt: { type: String, trim: true, maxlength: 220 }, caption: { type: String, trim: true, maxlength: 220 }, afterParagraph: { type: Number, min: 0, max: 1000, default: 0 } }],
+      default: [],
+      validate: [(items: Array<unknown>) => items.length <= 20, "Too many inline images"],
+    },
     faqs: {
       type: [{ question: { type: String, trim: true, maxlength: 240 }, answer: { type: String, trim: true, maxlength: 2000 } }],
       default: [],

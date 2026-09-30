@@ -16,6 +16,9 @@ const envSchema = z.object({
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(100),
   RESEND_API_KEY: optionalString,
   NOTIFICATION_FROM_EMAIL: optionalEmail,
+  CLOUDINARY_CLOUD_NAME: optionalString,
+  CLOUDINARY_API_KEY: optionalString,
+  CLOUDINARY_API_SECRET: optionalString,
 });
 
 const parsed = envSchema.safeParse(process.env);
